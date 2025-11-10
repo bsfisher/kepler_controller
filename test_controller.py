@@ -45,9 +45,3 @@ class TestController(KesslerController):
             str: name of this controller
         """
         return "Test Controller"
-
-    # @property
-    # def custom_sprite_path(self) -> str:
-    #     return "Neo.png"
-
-    #this is just a test - yash multani
