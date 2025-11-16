@@ -1,251 +1,279 @@
-# ECE 449 Intelligent Systems Engineering
-# Fall 2023
-# Dr. Scott Dick
-from pickle import FALSE
-
-# Demonstration of a fuzzy tree-based controller for Kessler Game.
-# Please see the Kessler Game Development Guide by Dr. Scott Dick for a
-#   detailed discussion of this source code.
-
-from kesslergame import KesslerController # In Eclipse, the name of the library is kesslergame, not src.kesslergame
 from typing import Dict, Tuple
-from cmath import sqrt
-import skfuzzy as fuzz
-from skfuzzy import control as ctrl
+from kesslergame import KesslerController
 import math
 import numpy as np
-import matplotlib as plt
+import skfuzzy as fuzz
+from skfuzzy import control as ctrl
 
 
+class OurController(KesslerController):
+    def __init__(self, params=None):
+        # used for optional performance tracking
+        self.eval_frames = 0
 
+        # ga-tunable parameters (with defaults)
+        if params is None:
+            params = {}
+        self.params = {
+            # scales the defuzzified ship_turn output
+            "turn_scale": params.get("turn_scale", 1.1329),
+            # threshold on ship_fire in [-1, 1]; >= threshold -> fire
+            "fire_threshold": params.get("fire_threshold", -0.47),
 
-class ScottDickController(KesslerController):
-    
-    
-        
-    def __init__(self):
-        self.eval_frames = 0 #What is this?
+            # movement / escape tuning
+            "escape_close_dist": params.get("escape_close_dist", 304.66),
+            "escape_med_dist":   params.get("escape_med_dist", 677.41),
+            "thrust_close":      params.get("thrust_close", 203.18),
+            "thrust_med":        params.get("thrust_med", 147.84),
 
-        # self.targeting_control is the targeting rulebase, which is static in this controller.      
-        # Declare variables
-        bullet_time = ctrl.Antecedent(np.arange(0,1.0,0.002), 'bullet_time')
-        theta_delta = ctrl.Antecedent(np.arange(-1*math.pi/30,math.pi/30,0.1), 'theta_delta') # Radians due to Python
-        ship_turn = ctrl.Consequent(np.arange(-180,180,1), 'ship_turn') # Degrees due to Kessler
-        ship_fire = ctrl.Consequent(np.arange(-1,1,0.1), 'ship_fire')
-        
-        #Declare fuzzy sets for bullet_time (how long it takes for the bullet to reach the intercept point)
-        bullet_time['S'] = fuzz.trimf(bullet_time.universe,[0,0,0.05])
-        bullet_time['M'] = fuzz.trimf(bullet_time.universe, [0,0.05,0.1])
-        bullet_time['L'] = fuzz.smf(bullet_time.universe,0.0,0.1)
-        
-        # Declare fuzzy sets for theta_delta (degrees of turn needed to reach the calculated firing angle)
-        # Hard-coded for a game step of 1/30 seconds
-        theta_delta['NL'] = fuzz.zmf(theta_delta.universe, -1*math.pi/30,-2*math.pi/90)
-        theta_delta['NM'] = fuzz.trimf(theta_delta.universe, [-1*math.pi/30, -2*math.pi/90, -1*math.pi/90])
-        theta_delta['NS'] = fuzz.trimf(theta_delta.universe, [-2*math.pi/90,-1*math.pi/90,math.pi/90])
-        # theta_delta['Z'] = fuzz.trimf(theta_delta.universe, [-1*math.pi/90,0,math.pi/90])
-        theta_delta['PS'] = fuzz.trimf(theta_delta.universe, [-1*math.pi/90,math.pi/90,2*math.pi/90])
-        theta_delta['PM'] = fuzz.trimf(theta_delta.universe, [math.pi/90,2*math.pi/90, math.pi/30])
-        theta_delta['PL'] = fuzz.smf(theta_delta.universe,2*math.pi/90,math.pi/30)
-        
-        # Declare fuzzy sets for the ship_turn consequent; this will be returned as turn_rate.
-        # Hard-coded for a game step of 1/30 seconds
-        ship_turn['NL'] = fuzz.trimf(ship_turn.universe, [-180,-180,-120])
-        ship_turn['NM'] = fuzz.trimf(ship_turn.universe, [-180,-120,-60])
-        ship_turn['NS'] = fuzz.trimf(ship_turn.universe, [-120,-60,60])
-        # ship_turn['Z'] = fuzz.trimf(ship_turn.universe, [-60,0,60])
-        ship_turn['PS'] = fuzz.trimf(ship_turn.universe, [-60,60,120])
-        ship_turn['PM'] = fuzz.trimf(ship_turn.universe, [60,120,180])
-        ship_turn['PL'] = fuzz.trimf(ship_turn.universe, [120,180,180])
-        
-        #Declare singleton fuzzy sets for the ship_fire consequent; -1 -> don't fire, +1 -> fire; this will be  thresholded
-        #   and returned as the boolean 'fire'
-        ship_fire['N'] = fuzz.trimf(ship_fire.universe, [-1,-1,0.0])
-        ship_fire['Y'] = fuzz.trimf(ship_fire.universe, [0.0,1,1]) 
-                
-        #Declare each fuzzy rule
-        rule1 = ctrl.Rule(bullet_time['L'] & theta_delta['NL'], (ship_turn['NL'], ship_fire['N']))
-        rule2 = ctrl.Rule(bullet_time['L'] & theta_delta['NM'], (ship_turn['NM'], ship_fire['N']))
-        rule3 = ctrl.Rule(bullet_time['L'] & theta_delta['NS'], (ship_turn['NS'], ship_fire['Y']))
-        # rule4 = ctrl.Rule(bullet_time['L'] & theta_delta['Z'], (ship_turn['Z'], ship_fire['Y']))
-        rule5 = ctrl.Rule(bullet_time['L'] & theta_delta['PS'], (ship_turn['PS'], ship_fire['Y']))
-        rule6 = ctrl.Rule(bullet_time['L'] & theta_delta['PM'], (ship_turn['PM'], ship_fire['N']))
-        rule7 = ctrl.Rule(bullet_time['L'] & theta_delta['PL'], (ship_turn['PL'], ship_fire['N']))
-        rule8 = ctrl.Rule(bullet_time['M'] & theta_delta['NL'], (ship_turn['NL'], ship_fire['N']))
-        rule9 = ctrl.Rule(bullet_time['M'] & theta_delta['NM'], (ship_turn['NM'], ship_fire['N']))
-        rule10 = ctrl.Rule(bullet_time['M'] & theta_delta['NS'], (ship_turn['NS'], ship_fire['Y']))
-        # rule11 = ctrl.Rule(bullet_time['M'] & theta_delta['Z'], (ship_turn['Z'], ship_fire['Y']))
-        rule12 = ctrl.Rule(bullet_time['M'] & theta_delta['PS'], (ship_turn['PS'], ship_fire['Y']))
-        rule13 = ctrl.Rule(bullet_time['M'] & theta_delta['PM'], (ship_turn['PM'], ship_fire['N']))
-        rule14 = ctrl.Rule(bullet_time['M'] & theta_delta['PL'], (ship_turn['PL'], ship_fire['N']))
-        rule15 = ctrl.Rule(bullet_time['S'] & theta_delta['NL'], (ship_turn['NL'], ship_fire['Y']))
-        rule16 = ctrl.Rule(bullet_time['S'] & theta_delta['NM'], (ship_turn['NM'], ship_fire['Y']))
-        rule17 = ctrl.Rule(bullet_time['S'] & theta_delta['NS'], (ship_turn['NS'], ship_fire['Y']))
-        # rule18 = ctrl.Rule(bullet_time['S'] & theta_delta['Z'], (ship_turn['Z'], ship_fire['Y']))
-        rule19 = ctrl.Rule(bullet_time['S'] & theta_delta['PS'], (ship_turn['PS'], ship_fire['Y']))
-        rule20 = ctrl.Rule(bullet_time['S'] & theta_delta['PM'], (ship_turn['PM'], ship_fire['Y']))
-        rule21 = ctrl.Rule(bullet_time['S'] & theta_delta['PL'], (ship_turn['PL'], ship_fire['Y']))
-     
-        #DEBUG
-        #bullet_time.view()
-        #theta_delta.view()
-        #ship_turn.view()
-        #ship_fire.view()
-     
-     
-        
-        # Declare the fuzzy controller, add the rules 
-        # This is an instance variable, and thus available for other methods in the same object. See notes.                         
-        # self.targeting_control = ctrl.ControlSystem([rule1, rule2, rule3, rule4, rule5, rule6, rule7, rule8, rule9, rule10, rule11, rule12, rule13, rule14, rule15])
-             
+            # when to switch from fighting to escaping
+            "danger_dist":       params.get("danger_dist", 559.95),
+            "danger_time":       params.get("danger_time", 0.99),
+        }
+
+        # fuzzy targeting system
+        # inputs:
+        #   bullet_time : predicted time (s) for bullet to reach intercept
+        #   theta_delta : angle error (rad) between ship heading and firing azimuth
+        # outputs:
+        #   ship_turn   : turn rate (deg/s)
+        #   ship_fire   : scalar in [-1, 1] -> thresholded to bool
+
+        bullet_time = ctrl.Antecedent(np.arange(0, 1.0, 0.002), "bullet_time")
+        theta_delta = ctrl.Antecedent(
+            np.arange(-1 * math.pi / 30, math.pi / 30, 0.001),
+            "theta_delta",
+        )
+        ship_turn = ctrl.Consequent(np.arange(-180, 180, 1), "ship_turn")
+        ship_fire = ctrl.Consequent(np.arange(-1, 1, 0.1), "ship_fire")
+
+        # bullet_time memberships
+        bullet_time["S"] = fuzz.trimf(bullet_time.universe, [0, 0, 0.05])
+        bullet_time["M"] = fuzz.trimf(bullet_time.universe, [0, 0.05, 0.1])
+        bullet_time["L"] = fuzz.smf(bullet_time.universe, 0.0, 0.1)
+
+        # theta_delta memberships
+        theta_delta["NL"] = fuzz.zmf(theta_delta.universe, -1 * math.pi / 30, -2 * math.pi / 90)
+        theta_delta["NM"] = fuzz.trimf(
+            theta_delta.universe,
+            [-1 * math.pi / 30, -2 * math.pi / 90, -1 * math.pi / 90],
+        )
+        theta_delta["NS"] = fuzz.trimf(
+            theta_delta.universe,
+            [-2 * math.pi / 90, -1 * math.pi / 90, math.pi / 90],
+        )
+        theta_delta["PS"] = fuzz.trimf(
+            theta_delta.universe,
+            [-1 * math.pi / 90, math.pi / 90, 2 * math.pi / 90],
+        )
+        theta_delta["PM"] = fuzz.trimf(
+            theta_delta.universe,
+            [math.pi / 90, 2 * math.pi / 90, math.pi / 30],
+        )
+        theta_delta["PL"] = fuzz.smf(theta_delta.universe, 2 * math.pi / 90, math.pi / 30)
+
+        # ship_turn memberships
+        ship_turn["NL"] = fuzz.trimf(ship_turn.universe, [-180, -180, -120])
+        ship_turn["NM"] = fuzz.trimf(ship_turn.universe, [-180, -120, -60])
+        ship_turn["NS"] = fuzz.trimf(ship_turn.universe, [-120, -60, 60])
+        ship_turn["PS"] = fuzz.trimf(ship_turn.universe, [-60, 60, 120])
+        ship_turn["PM"] = fuzz.trimf(ship_turn.universe, [60, 120, 180])
+        ship_turn["PL"] = fuzz.trimf(ship_turn.universe, [120, 180, 180])
+
+        # ship_fire memberships
+        ship_fire["N"] = fuzz.trimf(ship_fire.universe, [-1, -1, 0.0])
+        ship_fire["Y"] = fuzz.trimf(ship_fire.universe, [0.0, 1, 1])
+
+        # fuzzy rules (based on scott dick's example controller)
+        rules = [
+            ctrl.Rule(bullet_time["L"] & theta_delta["NL"], (ship_turn["NL"], ship_fire["N"])),
+            ctrl.Rule(bullet_time["L"] & theta_delta["NM"], (ship_turn["NM"], ship_fire["N"])),
+            ctrl.Rule(bullet_time["L"] & theta_delta["NS"], (ship_turn["NS"], ship_fire["Y"])),
+            ctrl.Rule(bullet_time["L"] & theta_delta["PS"], (ship_turn["PS"], ship_fire["Y"])),
+            ctrl.Rule(bullet_time["L"] & theta_delta["PM"], (ship_turn["PM"], ship_fire["N"])),
+            ctrl.Rule(bullet_time["L"] & theta_delta["PL"], (ship_turn["PL"], ship_fire["N"])),
+
+            ctrl.Rule(bullet_time["M"] & theta_delta["NL"], (ship_turn["NL"], ship_fire["N"])),
+            ctrl.Rule(bullet_time["M"] & theta_delta["NM"], (ship_turn["NM"], ship_fire["N"])),
+            ctrl.Rule(bullet_time["M"] & theta_delta["NS"], (ship_turn["NS"], ship_fire["Y"])),
+            ctrl.Rule(bullet_time["M"] & theta_delta["PS"], (ship_turn["PS"], ship_fire["Y"])),
+            ctrl.Rule(bullet_time["M"] & theta_delta["PM"], (ship_turn["PM"], ship_fire["N"])),
+            ctrl.Rule(bullet_time["M"] & theta_delta["PL"], (ship_turn["PL"], ship_fire["N"])),
+
+            ctrl.Rule(bullet_time["S"] & theta_delta["NL"], (ship_turn["NL"], ship_fire["Y"])),
+            ctrl.Rule(bullet_time["S"] & theta_delta["NM"], (ship_turn["NM"], ship_fire["Y"])),
+            ctrl.Rule(bullet_time["S"] & theta_delta["NS"], (ship_turn["NS"], ship_fire["Y"])),
+            ctrl.Rule(bullet_time["S"] & theta_delta["PS"], (ship_turn["PS"], ship_fire["Y"])),
+            ctrl.Rule(bullet_time["S"] & theta_delta["PM"], (ship_turn["PM"], ship_fire["Y"])),
+            ctrl.Rule(bullet_time["S"] & theta_delta["PL"], (ship_turn["PL"], ship_fire["Y"])),
+        ]
+
         self.targeting_control = ctrl.ControlSystem()
-        self.targeting_control.addrule(rule1)
-        self.targeting_control.addrule(rule2)
-        self.targeting_control.addrule(rule3)
-        # self.targeting_control.addrule(rule4)
-        self.targeting_control.addrule(rule5)
-        self.targeting_control.addrule(rule6)
-        self.targeting_control.addrule(rule7)
-        self.targeting_control.addrule(rule8)
-        self.targeting_control.addrule(rule9)
-        self.targeting_control.addrule(rule10)
-        # self.targeting_control.addrule(rule11)
-        self.targeting_control.addrule(rule12)
-        self.targeting_control.addrule(rule13)
-        self.targeting_control.addrule(rule14)
-        self.targeting_control.addrule(rule15)
-        self.targeting_control.addrule(rule16)
-        self.targeting_control.addrule(rule17)
-        # self.targeting_control.addrule(rule18)
-        self.targeting_control.addrule(rule19)
-        self.targeting_control.addrule(rule20)
-        self.targeting_control.addrule(rule21)
+        for r in rules:
+            self.targeting_control.addrule(r)
 
-        
-        
+    # -------------------------------------------------------
+    # main action loop
+    # -------------------------------------------------------
+    def actions(self, ship_state: Dict, game_state: Dict) -> Tuple[float, float, bool, bool]:
+        # if no asteroids, just sit still
+        if not game_state["asteroids"]:
+            self.eval_frames += 1
+            return 0.0, 0.0, False, False
 
-    def actions(self, ship_state: Dict, game_state: Dict) -> Tuple[float, float, bool]:
-        """
-        Method processed each time step by this controller.
-        """
-        # These were the constant actions in the basic demo, just spinning and shooting.
-        #thrust = 0 <- How do the values scale with asteroid velocity vector?
-        #turn_rate = 90 <- How do the values scale with asteroid velocity vector?
-        
-        # Answers: Asteroid position and velocity are split into their x,y components in a 2-element ?array each.
-        # So are the ship position and velocity, and bullet position and velocity. 
-        # Units appear to be meters relative to origin (where?), m/sec, m/sec^2 for thrust.
-        # Everything happens in a time increment: delta_time, which appears to be 1/30 sec; this is hardcoded in many places.
-        # So, position is updated by multiplying velocity by delta_time, and adding that to position.
-        # Ship velocity is updated by multiplying thrust by delta time.
-        # Ship position for this time increment is updated after the the thrust was applied.
-        
+        # ship position and heading
+        sx, sy = ship_state["position"]
+        heading_deg = ship_state["heading"]
 
-        # My demonstration controller does not move the ship, only rotates it to shoot the nearest asteroid.
-        # Goal: demonstrate processing of game state, fuzzy controller, intercept computation 
-        # Intercept-point calculation derived from the Law of Cosines, see notes for details and citation.
-
-        # Find the closest asteroid (disregards asteroid velocity)
-        ship_pos_x = ship_state["position"][0]     # See src/kesslergame/ship.py in the KesslerGame Github
-        ship_pos_y = ship_state["position"][1]       
-        closest_asteroid = None
-        
+        # find closest asteroid
+        closest = None
         for a in game_state["asteroids"]:
-            #Loop through all asteroids, find minimum Eudlidean distance
-            curr_dist = math.sqrt((ship_pos_x - a["position"][0])**2 + (ship_pos_y - a["position"][1])**2)
-            if closest_asteroid is None :
-                # Does not yet exist, so initialize first asteroid as the minimum. Ugh, how to do?
-                closest_asteroid = dict(aster = a, dist = curr_dist)
-                
-            else:    
-                # closest_asteroid exists, and is thus initialized. 
-                if closest_asteroid["dist"] > curr_dist:
-                    # New minimum found
-                    closest_asteroid["aster"] = a
-                    closest_asteroid["dist"] = curr_dist
+            dx = sx - a["position"][0]
+            dy = sy - a["position"][1]
+            dist = math.sqrt(dx * dx + dy * dy)
+            if (closest is None) or (dist < closest["dist"]):
+                closest = {"aster": a, "dist": dist}
 
-        # closest_asteroid is now the nearest asteroid object. 
-        # Calculate intercept time given ship & asteroid position, asteroid velocity vector, bullet speed (not direction).
-        # Based on Law of Cosines calculation, see notes.
-        
-        # Side D of the triangle is given by closest_asteroid.dist. Need to get the asteroid-ship direction
-        #    and the angle of the asteroid's current movement.
-        # REMEMBER TRIG FUNCTIONS ARE ALL IN RADAINS!!!
-        
-        
-        asteroid_ship_x = ship_pos_x - closest_asteroid["aster"]["position"][0]
-        asteroid_ship_y = ship_pos_y - closest_asteroid["aster"]["position"][1]
-        
-        asteroid_ship_theta = math.atan2(asteroid_ship_y,asteroid_ship_x)
-        
-        asteroid_direction = math.atan2(closest_asteroid["aster"]["velocity"][1], closest_asteroid["aster"]["velocity"][0]) # Velocity is a 2-element array [vx,vy].
-        my_theta2 = asteroid_ship_theta - asteroid_direction
-        cos_my_theta2 = math.cos(my_theta2)
-        # Need the speeds of the asteroid and bullet. speed * time is distance to the intercept point
-        asteroid_vel = math.sqrt(closest_asteroid["aster"]["velocity"][0]**2 + closest_asteroid["aster"]["velocity"][1]**2)
-        bullet_speed = 800 # Hard-coded bullet speed from bullet.py
-        
-        # Determinant of the quadratic formula b^2-4ac
-        targ_det = (-2 * closest_asteroid["dist"] * asteroid_vel * cos_my_theta2)**2 - (4*(asteroid_vel**2 - bullet_speed**2) * (closest_asteroid["dist"]**2))
-        
-        # Combine the Law of Cosines with the quadratic formula for solve for intercept time. Remember, there are two values produced.
-        intrcpt1 = ((2 * closest_asteroid["dist"] * asteroid_vel * cos_my_theta2) + math.sqrt(targ_det)) / (2 * (asteroid_vel**2 -bullet_speed**2))
-        intrcpt2 = ((2 * closest_asteroid["dist"] * asteroid_vel * cos_my_theta2) - math.sqrt(targ_det)) / (2 * (asteroid_vel**2-bullet_speed**2))
-        
-        # Take the smaller intercept time, as long as it is positive; if not, take the larger one.
-        if intrcpt1 > intrcpt2:
-            if intrcpt2 >= 0:
-                bullet_t = intrcpt2
-            else:
-                bullet_t = intrcpt1
+        a = closest["aster"]
+        D = closest["dist"]
+
+        # intercept math (same idea as scott's controller)
+        ax, ay = a["position"]
+        vx, vy = a["velocity"]
+
+        asteroid_ship_x = sx - ax
+        asteroid_ship_y = sy - ay
+        asteroid_ship_theta = math.atan2(asteroid_ship_y, asteroid_ship_x)
+
+        asteroid_direction = math.atan2(vy, vx)
+
+        theta2 = asteroid_ship_theta - asteroid_direction
+        cos_theta2 = math.cos(theta2)
+
+        asteroid_speed = math.sqrt(vx * vx + vy * vy)
+        bullet_speed = 800.0
+
+        det = (
+            (-2 * D * asteroid_speed * cos_theta2) ** 2
+            - 4 * (asteroid_speed**2 - bullet_speed**2) * (D**2)
+        )
+
+        if det < 0:
+            # no real intercept, just pick a small positive time
+            bullet_t = 0.1
         else:
-            if intrcpt1 >= 0:
-                bullet_t = intrcpt1
-            else:
-                bullet_t = intrcpt2
-                
-        # Calculate the intercept point. The work backwards to find the ship's firing angle my_theta1.
-        # Velocities are in m/sec, so bullet_t is in seconds. Add one tik, hardcoded to 1/30 sec.
-        intrcpt_x = closest_asteroid["aster"]["position"][0] + closest_asteroid["aster"]["velocity"][0] * (bullet_t+1/30)
-        intrcpt_y = closest_asteroid["aster"]["position"][1] + closest_asteroid["aster"]["velocity"][1] * (bullet_t+1/30)
+            sqrt_det = math.sqrt(det)
+            denom = 2 * (asteroid_speed**2 - bullet_speed**2)
+            t1 = (2 * D * asteroid_speed * cos_theta2 + sqrt_det) / denom
+            t2 = (2 * D * asteroid_speed * cos_theta2 - sqrt_det) / denom
+            candidates = [t for t in (t1, t2) if t >= 0]
+            bullet_t = min(candidates) if candidates else 0.1
 
-        
-        my_theta1 = math.atan2((intrcpt_y - ship_pos_y),(intrcpt_x - ship_pos_x))
-        
-        # Lastly, find the difference betwwen firing angle and the ship's current orientation. BUT THE SHIP HEADING IS IN DEGREES.
-        shooting_theta = my_theta1 - ((math.pi/180)*ship_state["heading"])
-        
-        # Wrap all angles to (-pi, pi)
+        # predicted intercept point
+        intrcpt_x = ax + vx * (bullet_t + 1 / 30)
+        intrcpt_y = ay + vy * (bullet_t + 1 / 30)
+
+        # angle from ship to intercept point
+        theta1 = math.atan2(intrcpt_y - sy, intrcpt_x - sx)
+
+        # angle error between current heading and firing direction
+        shooting_theta = theta1 - math.radians(heading_deg)
         shooting_theta = (shooting_theta + math.pi) % (2 * math.pi) - math.pi
-        
-        # Pass the inputs to the rulebase and fire it
-        shooting = ctrl.ControlSystemSimulation(self.targeting_control,flush_after_run=1)
-        
-        shooting.input['bullet_time'] = bullet_t
-        shooting.input['theta_delta'] = shooting_theta
-        
-        shooting.compute()
-        
-        # Get the defuzzified outputs
-        turn_rate = shooting.output['ship_turn']
-        
-        if shooting.output['ship_fire'] >= 0:
-            fire = True
-        else:
-            fire = False
-               
-        # And return your three outputs to the game simulation. Controller algorithm complete.
-        thrust = 0.0
 
+        # --- fuzzy targeting ---
+        sim = ctrl.ControlSystemSimulation(self.targeting_control, flush_after_run=1)
+        sim.input["bullet_time"] = max(0.0, min(bullet_t, 0.999))
+        sim.input["theta_delta"] = shooting_theta
+        sim.compute()
+
+        # fuzzy outputs for turning and firing
+        base_turn = float(sim.output["ship_turn"])
+        turn_rate = self.params["turn_scale"] * base_turn
+
+        # clamp turn_rate into the game’s allowed range
+        max_turn = 180.0
+        turn_rate = max(-max_turn, min(max_turn, turn_rate))
+
+        fire_scalar = float(sim.output["ship_fire"])
+        fire = fire_scalar >= self.params["fire_threshold"]
+
+        # --------------------------------------------------
+        # geometry for escape logic
+        # --------------------------------------------------
+        ship_heading_rad = math.radians(heading_deg)
+
+        # angle from ship to asteroid
+        angle_to_asteroid = math.atan2(ay - sy, ax - sx)
+
+        # escape direction (straight away from asteroid)
+        escape_angle = angle_to_asteroid + math.pi
+
+        # smallest signed difference between heading and escape direction
+        escape_error = (escape_angle - ship_heading_rad + math.pi) % (2 * math.pi) - math.pi
+        escape_error_abs = abs(escape_error)
+
+        # approximate time until asteroid reaches ship
+        rel_speed = max(asteroid_speed, 1e-3)  # avoid divide-by-zero
+        time_to_ship = D / rel_speed
+
+        # pull ga-tuned movement parameters
+        escape_close_dist = self.params["escape_close_dist"]
+        escape_med_dist = self.params["escape_med_dist"]
+        thrust_close = self.params["thrust_close"]
+        thrust_med = self.params["thrust_med"]
+        danger_dist = self.params["danger_dist"]
+        danger_time = self.params["danger_time"]
+
+        # --------------------------------------------------
+        # baseline escape movement (ga-tunable)
+        # --------------------------------------------------
+        thrust = 0.0
+        if D < escape_close_dist and escape_error_abs < math.radians(60):
+            # close and mostly pointed away → strong thrust
+            thrust = thrust_close
+        elif D < escape_med_dist and escape_error_abs < math.radians(60):
+            # medium distance and mostly pointed away → smaller thrust
+            thrust = thrust_med
+        else:
+            thrust = 0.0
+
+        # --------------------------------------------------
+        # danger check: can we kill it before it hits us?
+        # --------------------------------------------------
+        # if impact is soon and bullet_t is not clearly smaller, switch to hard escape
+        escape_mode = False
+        if D < danger_dist and time_to_ship < danger_time and bullet_t > time_to_ship:
+            # hard escape: turn toward escape direction and burn
+            kp = 220.0  # proportional gain for steering toward escape
+            turn_rate = kp * escape_error
+            turn_rate = max(-max_turn, min(max_turn, turn_rate))
+            thrust = 260.0
+            fire = False
+            escape_mode = True
+
+        # --------------------------------------------------
+        # safe last-ditch mine logic
+        # --------------------------------------------------
+        # mines damage the ship too, so only drop when:
+        #   - asteroid is very close
+        #   - impact is soon
+        #   - we are already escaping and pointed almost exactly away
         drop_mine = False
-        
-        self.eval_frames +=1
-        
-        #DEBUG
-        print(thrust, bullet_t, shooting_theta, turn_rate, fire)
-        
+        CLOSE_DIST = 230.0
+        CRITICAL_TIME = 0.5
+        ESCAPE_ANGLE = math.radians(20)
+
+        if (
+            escape_mode
+            and D < CLOSE_DIST
+            and time_to_ship < CRITICAL_TIME
+            and escape_error_abs < ESCAPE_ANGLE
+        ):
+            drop_mine = True
+
+        self.eval_frames += 1
         return thrust, turn_rate, fire, drop_mine
 
     @property
     def name(self) -> str:
-        return "ScottDick Controller"
+        return "KEPPLER MY GOAT"
