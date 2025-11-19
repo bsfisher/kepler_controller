@@ -23,12 +23,12 @@ class OurController(KesslerController):
             # movement / escape tuning
             "escape_close_dist": params.get("escape_close_dist", 304.66),
             "escape_med_dist":   params.get("escape_med_dist", 677.41),
-            "thrust_close":      params.get("thrust_close", 203.18),
+            "thrust_close":      params.get("thrust_close", 263.18),
             "thrust_med":        params.get("thrust_med", 147.84),
 
             # when to switch from fighting to escaping
-            "danger_dist":       params.get("danger_dist", 559.95),
-            "danger_time":       params.get("danger_time", 0.99),
+            "danger_dist":       params.get("danger_dist", 100.0),
+            "danger_time":       params.get("danger_time", 0.92),
         }
 
         # fuzzy targeting system
@@ -123,23 +123,43 @@ class OurController(KesslerController):
 
         # ship position and heading
         sx, sy = ship_state["position"]
+        svx, svy = ship_state["velocity"]
         heading_deg = ship_state["heading"]
 
-        # find closest asteroid
-        closest = None
+        # find the closest asteroid
+        danger_target = None
+        danger_dist = float("inf")
+        min_dist = float("inf")
+        min_collision_time = float("inf")
+        sspeed = math.hypot(svx, svy)
+
         for a in game_state["asteroids"]:
-            dx = sx - a["position"][0]
-            dy = sy - a["position"][1]
-            dist = math.sqrt(dx * dx + dy * dy)
-            if (closest is None) or (dist < closest["dist"]):
-                closest = {"aster": a, "dist": dist}
+            ax, ay = a["position"]
+            vx, vy = a["velocity"]
 
-        a = closest["aster"]
-        D = closest["dist"]
+            dx = sx - ax
+            dy = sy - ay
 
-        # intercept math (same idea as scott's controller)
-        ax, ay = a["position"]
-        vx, vy = a["velocity"]
+            dist = math.hypot(dx, dy)
+
+            if  dist < min_dist:
+                min_dist = dist
+                shoot_target = a
+
+            rel_vx = vx - ship_state["velocity"][0]
+            rel_vy = vy - ship_state["velocity"][1]
+
+            rel_speed = max(math.hypot(rel_vx, rel_vy), 1e-7)
+            collision_time  = dist/rel_speed
+
+            if collision_time < min_collision_time:
+                min_collision_time = collision_time
+                danger_target = a
+                danger_dist = dist
+
+        ax, ay = shoot_target["position"]
+        vx, vy = shoot_target["velocity"]
+        D = min_dist
 
         asteroid_ship_x = sx - ax
         asteroid_ship_y = sy - ay
@@ -173,12 +193,9 @@ class OurController(KesslerController):
         intrcpt_x = ax + vx * (bullet_t + 1 / 30)
         intrcpt_y = ay + vy * (bullet_t + 1 / 30)
 
-        # angle from ship to intercept point
-        theta1 = math.atan2(intrcpt_y - sy, intrcpt_x - sx)
-
         # angle error between current heading and firing direction
-        shooting_theta = theta1 - math.radians(heading_deg)
-        shooting_theta = (shooting_theta + math.pi) % (2 * math.pi) - math.pi
+        theta1 = math.atan2(intrcpt_y - sy, intrcpt_x - sx)
+        shooting_theta = (theta1 - math.radians(heading_deg) + math.pi) % (2 * math.pi) - math.pi
 
         # --- fuzzy targeting ---
         sim = ctrl.ControlSystemSimulation(self.targeting_control, flush_after_run=1)
@@ -188,68 +205,55 @@ class OurController(KesslerController):
 
         # fuzzy outputs for turning and firing
         base_turn = float(sim.output["ship_turn"])
-        turn_rate = self.params["turn_scale"] * base_turn
-
-        # clamp turn_rate into the game’s allowed range
-        max_turn = 180.0
-        turn_rate = max(-max_turn, min(max_turn, turn_rate))
-
-        fire_scalar = float(sim.output["ship_fire"])
-        fire = fire_scalar >= self.params["fire_threshold"]
+        thrust = 0.0
+        turn_rate = max(-180, min(180, base_turn * self.params["turn_scale"]))
+        fire = float(sim.output["ship_fire"]) >= self.params["fire_threshold"]
 
         # --------------------------------------------------
         # geometry for escape logic
         # --------------------------------------------------
-        ship_heading_rad = math.radians(heading_deg)
+        dx2 = sx - danger_target["position"][0]
+        dy2 = sy - danger_target["position"][1]
 
-        # angle from ship to asteroid
-        angle_to_asteroid = math.atan2(ay - sy, ax - sx)
+        # angle from ship to dangerous asteroid
+        angle_to_danger = math.atan2(dy2, dx2)
 
-        # escape direction (straight away from asteroid)
-        escape_angle = angle_to_asteroid + math.pi
+        # escape direction (straight away from dangerous asteroid)
+        escape_angle = angle_to_danger
 
         # smallest signed difference between heading and escape direction
+        ship_heading_rad = math.radians(heading_deg)
         escape_error = (escape_angle - ship_heading_rad + math.pi) % (2 * math.pi) - math.pi
         escape_error_abs = abs(escape_error)
 
-        # approximate time until asteroid reaches ship
-        rel_speed = max(asteroid_speed, 1e-3)  # avoid divide-by-zero
-        time_to_ship = D / rel_speed
-
-        # pull ga-tuned movement parameters
-        escape_close_dist = self.params["escape_close_dist"]
-        escape_med_dist = self.params["escape_med_dist"]
-        thrust_close = self.params["thrust_close"]
-        thrust_med = self.params["thrust_med"]
-        danger_dist = self.params["danger_dist"]
-        danger_time = self.params["danger_time"]
-
-        # --------------------------------------------------
-        # baseline escape movement (ga-tunable)
-        # --------------------------------------------------
-        thrust = 0.0
-        if D < escape_close_dist and escape_error_abs < math.radians(60):
-            # close and mostly pointed away → strong thrust
-            thrust = thrust_close
-        elif D < escape_med_dist and escape_error_abs < math.radians(60):
-            # medium distance and mostly pointed away → smaller thrust
-            thrust = thrust_med
-        else:
-            thrust = 0.0
+        time_to_ship = min_collision_time
 
         # --------------------------------------------------
         # danger check: can we kill it before it hits us?
         # --------------------------------------------------
         # if impact is soon and bullet_t is not clearly smaller, switch to hard escape
         escape_mode = False
-        if D < danger_dist and time_to_ship < danger_time and bullet_t > time_to_ship:
+        kp = 1000  # proportional gain for steering toward escape
+        max_turn = 180.0
+        anglethresh = math.radians(270)
+        if danger_dist < self.params["danger_dist"] or time_to_ship < self.params["danger_time"]:
             # hard escape: turn toward escape direction and burn
-            kp = 220.0  # proportional gain for steering toward escape
-            turn_rate = kp * escape_error
-            turn_rate = max(-max_turn, min(max_turn, turn_rate))
-            thrust = 260.0
+            turn_rate = max(-max_turn, min(max_turn, kp * escape_error))
+
+            if abs(escape_error) < anglethresh:
+                thrust = self.params["thrust_close"]
+            else:
+                thrust = 0.0
             fire = False
             escape_mode = True
+        elif danger_dist < self.params["escape_med_dist"] or time_to_ship > self.params["danger_time"]:
+            turn_rate = max(-180, min(180, base_turn * self.params["turn_scale"]))
+
+            if sspeed > (self.params["thrust_med"]/3):
+                thrust = -self.params["thrust_close"]
+            else:
+                thrust = 0.0
+            fire = float(sim.output["ship_fire"]) >= self.params["fire_threshold"]
 
         # --------------------------------------------------
         # safe last-ditch mine logic
@@ -261,7 +265,7 @@ class OurController(KesslerController):
         drop_mine = False
         CLOSE_DIST = 230.0
         CRITICAL_TIME = 0.5
-        ESCAPE_ANGLE = math.radians(20)
+        ESCAPE_ANGLE = math.radians(180)
 
         if (
             escape_mode
@@ -269,11 +273,11 @@ class OurController(KesslerController):
             and time_to_ship < CRITICAL_TIME
             and escape_error_abs < ESCAPE_ANGLE
         ):
-            drop_mine = True
+            drop_mine = False
 
         self.eval_frames += 1
         return thrust, turn_rate, fire, drop_mine
 
     @property
     def name(self) -> str:
-        return "KEPPLER MY GOAT"
+        return "EULER MY GOAT"
