@@ -12,6 +12,7 @@ it:
 
 import random
 import math
+import json
 from typing import Dict, List, Tuple
 
 from kesslergame import KesslerGame, Scenario, GraphicsType
@@ -41,6 +42,14 @@ PARAM_BOUNDS = {
     "danger_dist":       (300.0, 700.0),
     "danger_time":       (0.5, 1.4),
 }
+
+def append_chromosome_json(chrom, fitness, path="chromosomes.jsonl"):
+    entry = {
+        "fitness": fitness,
+        "params": chrom
+    }
+    with open(path, "a") as f:
+        f.write(json.dumps(entry) + "\n")
 
 
 def random_chromosome() -> Dict[str, float]:
@@ -89,7 +98,11 @@ def make_scenario() -> Scenario:
 def make_game(no_graphics: bool = True) -> KesslerGame:
     """create a kesslergame instance. for ga we usually want no graphics."""
     if no_graphics:
-        gtype = GraphicsType.None_ if hasattr(GraphicsType, "None_") else GraphicsType.Tkinter
+        gtype = (
+            GraphicsType.NoGraphics
+            if hasattr(GraphicsType, "NoGraphics")
+            else GraphicsType.None_
+        )
     else:
         gtype = GraphicsType.Tkinter
 
@@ -215,4 +228,7 @@ if __name__ == "__main__":
     print("\n=== ga finished ===")
     print(f"best params: {best_params}")
     print(f"best fitness: {best_fit:.2f}")
-    print("\ncopy these into ourcontroller's default params if you like.")
+
+    append_chromosome_json(best_params, best_fit)
+    
+    print("\nSaved into chromosomes.jsonl")

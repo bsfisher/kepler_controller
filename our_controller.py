@@ -1,35 +1,58 @@
 from typing import Dict, Tuple
 from kesslergame import KesslerController
 import math
+import json
 import numpy as np
 import skfuzzy as fuzz
 from skfuzzy import control as ctrl
 
 
 class OurController(KesslerController):
+    def fetch_best_chromosome(self, path="chromosomes.jsonl"):
+        best = None
+        best_fitness = float("-inf")
+        with open(path, "r") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+            entry = json.loads(line)
+            # Json loaded as dict of fitness and params dict
+            fitness = entry["fitness"]
+            if fitness > best_fitness:
+                best_fitness = fitness
+                best = entry["params"]
+
+        return best
+
+
     def __init__(self, params=None):
         # used for optional performance tracking
         self.eval_frames = 0
 
         # ga-tunable parameters (with defaults)
-        if params is None:
-            params = {}
-        self.params = {
-            # scales the defuzzified ship_turn output
-            "turn_scale": params.get("turn_scale", 1.1329),
-            # threshold on ship_fire in [-1, 1]; >= threshold -> fire
-            "fire_threshold": params.get("fire_threshold", -0.47),
+        self.params = params
+        if self.params is None:
+            self.params = self.fetch_best_chromosome()
+            if self.params is None:
+                raise ValueError("No chromosome found in jsonl file")
 
-            # movement / escape tuning
-            "escape_close_dist": params.get("escape_close_dist", 304.66),
-            "escape_med_dist":   params.get("escape_med_dist", 677.41),
-            "thrust_close":      params.get("thrust_close", 263.18),
-            "thrust_med":        params.get("thrust_med", 147.84),
 
-            # when to switch from fighting to escaping
-            "danger_dist":       params.get("danger_dist", 100.0),
-            "danger_time":       params.get("danger_time", 0.92),
-        }
+        # self.params = {
+        #     # scales the defuzzified ship_turn output
+        #     "turn_scale": params.get("turn_scale", 1.1329),
+        #     # threshold on ship_fire in [-1, 1]; >= threshold -> fire
+        #     "fire_threshold": params.get("fire_threshold", -0.47),
+
+        #     # movement / escape tuning
+        #     "escape_close_dist": params.get("escape_close_dist", 304.66),
+        #     "escape_med_dist":   params.get("escape_med_dist", 677.41),
+        #     "thrust_close":      params.get("thrust_close", 263.18),
+        #     "thrust_med":        params.get("thrust_med", 147.84),
+
+        #     # when to switch from fighting to escaping
+        #     "danger_dist":       params.get("danger_dist", 100.0),
+        #     "danger_time":       params.get("danger_time", 0.92),
+        # }
 
         # fuzzy targeting system
         # inputs:
