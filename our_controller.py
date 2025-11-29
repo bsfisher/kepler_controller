@@ -28,6 +28,7 @@ class OurController(KesslerController):
     def __init__(self, params=None):
         # used for optional performance tracking
         self.eval_frames = 0
+        self.mine_timer = 0
 
         # ga-tunable parameters (with defaults)
         self.params = params
@@ -256,24 +257,17 @@ class OurController(KesslerController):
         # --------------------------------------------------
         # if impact is soon and bullet_t is not clearly smaller, switch to hard escape
         escape_mode = False
-        kp = 1000  # proportional gain for steering toward escape
         max_turn = 180.0
-        anglethresh = math.radians(270)
-        if danger_dist < self.params["danger_dist"] or time_to_ship < self.params["danger_time"]:
+        if danger_dist < self.params["danger_dist"] and time_to_ship < self.params["danger_time"]:
             # hard escape: turn toward escape direction and burn
-            turn_rate = max(-max_turn, min(max_turn, kp * escape_error))
-
-            if abs(escape_error) < anglethresh:
-                thrust = self.params["thrust_close"]
-            else:
-                thrust = 0.0
-            fire = False
+            turn_rate = max(-max_turn, min(max_turn, escape_error))
+            thrust = -self.params["thrust_close"]
+            fire = True
             escape_mode = True
-        elif danger_dist < self.params["escape_med_dist"] or time_to_ship > self.params["danger_time"]:
+        elif danger_dist > self.params["danger_dist"] or time_to_ship > self.params["danger_time"]:
             turn_rate = max(-180, min(180, base_turn * self.params["turn_scale"]))
-
-            if sspeed > (self.params["thrust_med"]/3):
-                thrust = -self.params["thrust_close"]
+            if sspeed > abs(self.params["thrust_med"]/3):
+                thrust = self.params["thrust_close"]
             else:
                 thrust = 0.0
             fire = float(sim.output["ship_fire"]) >= self.params["fire_threshold"]
@@ -286,17 +280,16 @@ class OurController(KesslerController):
         #   - impact is soon
         #   - we are already escaping and pointed almost exactly away
         drop_mine = False
-        CLOSE_DIST = 230.0
-        CRITICAL_TIME = 0.5
-        ESCAPE_ANGLE = math.radians(180)
 
+        self.mine_timer += 1
         if (
             escape_mode
-            and D < CLOSE_DIST
-            and time_to_ship < CRITICAL_TIME
-            and escape_error_abs < ESCAPE_ANGLE
+            and D < self.params["danger_dist"]/2
+            and time_to_ship < self.params["danger_time"]/2
+            and self.mine_timer >= 30
         ):
-            drop_mine = False
+            drop_mine = True
+            self.mine_timer = 0
 
         self.eval_frames += 1
         return thrust, turn_rate, fire, drop_mine
