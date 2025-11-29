@@ -147,9 +147,8 @@ def evaluate_chromosome(chrom: Dict[str, float], runs: int = 3) -> float:
 
         # simple fitness: reward hits and accuracy, penalize deaths
         episode_fitness = (
-            100 * my_team.asteroids_hit
-            + 100 * my_team.accuracy
-            - 200 * my_team.deaths
+            1000 * my_team.asteroids_hit
+            - 100000 * my_team.deaths
         )
 
         total_score += episode_fitness
@@ -162,8 +161,8 @@ def evaluate_chromosome(chrom: Dict[str, float], runs: int = 3) -> float:
 # -----------------------------
 
 def run_ga(
-    population_size: int = 8,
-    generations: int = 5,
+    population_size: int = 5,
+    generations: int = 8,
     elite_frac: float = 0.25,
     mutation_rate: float = 0.3,
     mutation_scale: float = 0.2,
@@ -218,8 +217,8 @@ if __name__ == "__main__":
     random.seed(42)
 
     best_params, best_fit = run_ga(
-        population_size=8,
-        generations=5,
+        population_size=16,
+        generations=8,
         elite_frac=0.25,
         mutation_rate=0.3,
         mutation_scale=0.2,
@@ -232,3 +231,4 @@ if __name__ == "__main__":
     append_chromosome_json(best_params, best_fit)
     
     print("\nSaved into chromosomes.jsonl")
+
